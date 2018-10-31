@@ -1,516 +1,438 @@
-import os
-import cv2
-import xml.dom.minidom
-from xml.dom.minidom import Document
-import math
-import xml.dom.minidom as DOC
-import xml.etree.ElementTree as ET
-import numpy as np
+# -*- coding=utf-8 -*-
+##############################################################
+# description:
+#     data augmentation for obeject detection
+# author:
+#     zhicai 2018-10-23
+##############################################################
+
+# 包括:
+#     1. 裁剪(需改变bbox)
+#     2. 平移(需改变bbox)
+#     3. 改变亮度
+#     4. 加噪声
+#     5. 旋转角度(需要改变bbox)
+#     6. 镜像(需要改变bbox)
+#     7. cutout
+# 注意:   
+#     random.seed(),相同的seed,产生的随机数是一样的!!
+
+import time
 import random
+import cv2
+import os
+import math
+import numpy as np
 from skimage.util import random_noise
 from skimage import exposure
 
-
-# 获取路径下所有文件的完整路径，用于读取文件用
-def GetFileFromThisRootDir(dir, ext=None):
-    allfiles = []
-    needExtFilter = (ext != None)
-    for root, dirs, files in os.walk(dir):
-        for filespath in files:
-            filepath = os.path.join(root, filespath)
-            extension = os.path.splitext(filepath)[1][1:]
-            if needExtFilter and extension in ext:
-                allfiles.append(filepath)
-            elif not needExtFilter:
-                allfiles.append(filepath)
-    return allfiles
-
-
-
-# 读取xml文件，xmlfile参数表示xml的路径
-def readXml(xmlfile):
-    DomTree = xml.dom.minidom.parse(xmlfile)
-    annotation = DomTree.documentElement
-    sizelist = annotation.getElementsByTagName('size')  # [<DOM Element: filename at 0x381f788>]
-    heights = sizelist[0].getElementsByTagName('height')
-    height = int(heights[0].childNodes[0].data)
-    widths = sizelist[0].getElementsByTagName('width')
-    width = int(widths[0].childNodes[0].data)
-    depths = sizelist[0].getElementsByTagName('depth')
-    depth = int(depths[0].childNodes[0].data)
-    objectlist = annotation.getElementsByTagName('object')
-    bboxes = []
-    for objects in objectlist:
-        namelist = objects.getElementsByTagName('name')
-        class_label = namelist[0].childNodes[0].data
-        bndbox = objects.getElementsByTagName('bndbox')[0]
-        x1_list = bndbox.getElementsByTagName('xmin')
-        x1 = int(float(x1_list[0].childNodes[0].data))
-        y1_list = bndbox.getElementsByTagName('ymin')
-        y1 = int(float(y1_list[0].childNodes[0].data))
-        x2_list = bndbox.getElementsByTagName('xmax')
-        x2 = int(float(x2_list[0].childNodes[0].data))
-        y2_list = bndbox.getElementsByTagName('ymax')
-        y2 = int(float(y2_list[0].childNodes[0].data))
-        # 这里我box的格式【xmin，ymin，xmax，ymax，classname】
-        bbox = [x1, y1, x2, y2, class_label]
-        bboxes.append(bbox)
-    return bboxes, width, height, depth
-
-def parse_xml(xml_path):
-    '''
-    输入：
-        xml_path: xml的文件路径
-    输出：
-        从xml文件中提取bounding box信息, 格式为[[x_min, y_min, x_max, y_max, name]]
-    '''
-
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-    objs = root.findall('object')
-    coords = list()
-    for ix, obj in enumerate(objs):
-        name = obj.find('name').text
-        box = obj.find('bndbox')
-        x_min = int(float(box[0].text))
-        y_min = int(float(box[1].text))
-        x_max = int(float(box[2].text))
-        y_max = int(float(box[3].text))
-        coords.append([x_min, y_min, x_max, y_max, name])
-    return coords
-
-# 写xml文件，参数中tmp表示路径，imgname是文件名（没有尾缀）ps有尾缀也无所谓
-def writeXml(tmp, imgname, w, h, d, bboxes):
-    doc = Document()
-    # owner
-    annotation = doc.createElement('annotation')
-    doc.appendChild(annotation)
-    # owner
-    folder = doc.createElement('folder')
-    annotation.appendChild(folder)
-    folder_txt = doc.createTextNode("VOC2007_LISA")
-    folder.appendChild(folder_txt)
-
-    filename = doc.createElement('filename')
-    annotation.appendChild(filename)
-    filename_txt = doc.createTextNode(imgname)
-    filename.appendChild(filename_txt)
-    # ones#
-    source = doc.createElement('source')
-    annotation.appendChild(source)
-
-    database = doc.createElement('database')
-    source.appendChild(database)
-    database_txt = doc.createTextNode("My Database")
-    database.appendChild(database_txt)
-
-    annotation_new = doc.createElement('annotation')
-    source.appendChild(annotation_new)
-    annotation_new_txt = doc.createTextNode("VOC2007_LISA")
-    annotation_new.appendChild(annotation_new_txt)
-
-    image = doc.createElement('image')
-    source.appendChild(image)
-    image_txt = doc.createTextNode("flickr")
-    image.appendChild(image_txt)
-    # owner
-    owner = doc.createElement('owner')
-    annotation.appendChild(owner)
-
-    flickrid = doc.createElement('flickrid')
-    owner.appendChild(flickrid)
-    flickrid_txt = doc.createTextNode("NULL")
-    flickrid.appendChild(flickrid_txt)
-
-    ow_name = doc.createElement('name')
-    owner.appendChild(ow_name)
-    ow_name_txt = doc.createTextNode("idannel")
-    ow_name.appendChild(ow_name_txt)
-    # onee#
-    # twos#
-    size = doc.createElement('size')
-    annotation.appendChild(size)
-
-    width = doc.createElement('width')
-    size.appendChild(width)
-    width_txt = doc.createTextNode(str(w))
-    width.appendChild(width_txt)
-
-    height = doc.createElement('height')
-    size.appendChild(height)
-    height_txt = doc.createTextNode(str(h))
-    height.appendChild(height_txt)
-
-
-    depth = doc.createElement('depth')
-    size.appendChild(depth)
-    depth_txt = doc.createTextNode(str(d))
-    depth.appendChild(depth_txt)
-    # twoe#
-    segmented = doc.createElement('segmented')
-    annotation.appendChild(segmented)
-    segmented_txt = doc.createTextNode("0")
-    segmented.appendChild(segmented_txt)
-
-    for bbox in bboxes:
-        # 'go'数据量足够，不需要增强
-        if bbox[4].lower() == 'go':
-            continue
-        # threes#
-        object_new = doc.createElement("object")
-        annotation.appendChild(object_new)
-
-        name = doc.createElement('name')
-        object_new.appendChild(name)
-        name_txt = doc.createTextNode(str(bbox[4]))
-        name.appendChild(name_txt)
-
-        pose = doc.createElement('pose')
-        object_new.appendChild(pose)
-        pose_txt = doc.createTextNode("Unspecified")
-        pose.appendChild(pose_txt)
-
-        truncated = doc.createElement('truncated')
-        object_new.appendChild(truncated)
-        truncated_txt = doc.createTextNode("0")
-        truncated.appendChild(truncated_txt)
-
-        difficult = doc.createElement('difficult')
-        object_new.appendChild(difficult)
-        difficult_txt = doc.createTextNode("0")
-        difficult.appendChild(difficult_txt)
-        # threes-1#
-        bndbox = doc.createElement('bndbox')
-        object_new.appendChild(bndbox)
-
-        xmin = doc.createElement('xmin')
-        bndbox.appendChild(xmin)
-        xmin_txt = doc.createTextNode(str(float(int(bbox[0]))))
-        xmin.appendChild(xmin_txt)
-
-        ymin = doc.createElement('ymin')
-        bndbox.appendChild(ymin)
-        ymin_txt = doc.createTextNode(str(float(int(bbox[1]))))
-        ymin.appendChild(ymin_txt)
-
-        xmax = doc.createElement('xmax')
-        bndbox.appendChild(xmax)
-        xmax_txt = doc.createTextNode(str(float(int(bbox[2]))))
-        xmax.appendChild(xmax_txt)
-
-        ymax = doc.createElement('ymax')
-        bndbox.appendChild(ymax)
-        ymax_txt = doc.createTextNode(str(float(int(bbox[3]))))
-        ymax.appendChild(ymax_txt)
-
-        print(bbox[4], float(int(bbox[0])), float(int(bbox[1])), float(int(bbox[2])), float(int(bbox[3])))
-
-    tempfile = tmp + "/%s.xml" % imgname
-    with open(tempfile, 'wb') as f:
-        f.write(doc.toprettyxml(indent='\t', encoding='utf-8'))
-    return
-
-def generate_xml(img_name,coords,img_size,out_root_path):
-    '''
-    输入：
-        img_name：图片名称，如a.jpg
-        coords:坐标list，格式为[[x_min, y_min, x_max, y_max, name]]，name为概况的标注
-        img_size：图像的大小,格式为[h,w,c]
-        out_root_path: xml文件输出的根路径
-    '''
-    doc = DOC.Document()  # 创建DOM文档对象
-
-    annotation = doc.createElement('annotation')
-    doc.appendChild(annotation)
-
-    title = doc.createElement('folder')
-    title_text = doc.createTextNode('Tianchi')
-    title.appendChild(title_text)
-    annotation.appendChild(title)
-
-    title = doc.createElement('filename')
-    title_text = doc.createTextNode(img_name)
-    title.appendChild(title_text)
-    annotation.appendChild(title)
-
-    source = doc.createElement('source')
-    annotation.appendChild(source)
-
-    title = doc.createElement('database')
-    title_text = doc.createTextNode('The Tianchi Database')
-    title.appendChild(title_text)
-    source.appendChild(title)
-
-    title = doc.createElement('annotation')
-    title_text = doc.createTextNode('Tianchi')
-    title.appendChild(title_text)
-    source.appendChild(title)
-
-    size = doc.createElement('size')
-    annotation.appendChild(size)
-
-    title = doc.createElement('width')
-    title_text = doc.createTextNode(str(img_size[1]))
-    title.appendChild(title_text)
-    size.appendChild(title)
-
-    title = doc.createElement('height')
-    title_text = doc.createTextNode(str(img_size[0]))
-    title.appendChild(title_text)
-    size.appendChild(title)
-
-    title = doc.createElement('depth')
-    title_text = doc.createTextNode(str(img_size[2]))
-    title.appendChild(title_text)
-    size.appendChild(title)
-
-    for coord in coords:
-
-        object = doc.createElement('object')
-        annotation.appendChild(object)
-
-        title = doc.createElement('name')
-        title_text = doc.createTextNode(coord[4])
-        title.appendChild(title_text)
-        object.appendChild(title)
-
-        pose = doc.createElement('pose')
-        pose.appendChild(doc.createTextNode('Unspecified'))
-        object.appendChild(pose)
-        truncated = doc.createElement('truncated')
-        truncated.appendChild(doc.createTextNode('1'))
-        object.appendChild(truncated)
-        difficult = doc.createElement('difficult')
-        difficult.appendChild(doc.createTextNode('0'))
-        object.appendChild(difficult)
-
-        bndbox = doc.createElement('bndbox')
-        object.appendChild(bndbox)
-        title = doc.createElement('xmin')
-        title_text = doc.createTextNode(str(int(float(coord[0]))))
-        title.appendChild(title_text)
-        bndbox.appendChild(title)
-        title = doc.createElement('ymin')
-        title_text = doc.createTextNode(str(int(float(coord[1]))))
-        title.appendChild(title_text)
-        bndbox.appendChild(title)
-        title = doc.createElement('xmax')
-        title_text = doc.createTextNode(str(int(float(coord[2]))))
-        title.appendChild(title_text)
-        bndbox.appendChild(title)
-        title = doc.createElement('ymax')
-        title_text = doc.createTextNode(str(int(float(coord[3]))))
-        title.appendChild(title_text)
-        bndbox.appendChild(title)
-
-    # 将DOM对象doc写入文件
-    f = open(os.path.jpin(out_root_path, img_name),'w')
-    f.write(doc.toprettyxml(indent = ''))
-    f.close()
-
-
-#加噪声
-def addNoise(img, bboxes):
+def show_pic(img, bboxes=None):
     '''
     输入:
         img:图像array
-    输出:
-        加噪声后的图像array,由于输出的像素是在[0,1]之间,所以得乘以255
+        bboxes:图像的所有boudning box list, 格式为[[x_min, y_min, x_max, y_max]....]
+        names:每个box对应的名称
     '''
-    # random.seed(int(time.time()))
-    # return random_noise(img, mode='gaussian', seed=int(time.time()), clip=True)*255
-    return random_noise(img, mode='gaussian', clip=True)*255, bboxes
+    cv2.imwrite('./1.jpg', img)
+    img = cv2.imread('./1.jpg')
+    for i in range(len(bboxes)):
+        bbox = bboxes[i]
+        x_min = bbox[0]
+        y_min = bbox[1]
+        x_max = bbox[2]
+        y_max = bbox[3]
+        cv2.rectangle(img,(int(x_min),int(y_min)),(int(x_max),int(y_max)),(0,255,0),3) 
+    cv2.namedWindow('pic', 0)  # 1表示原图
+    cv2.moveWindow('pic', 0, 0)
+    cv2.resizeWindow('pic', 1200,800)  # 可视化的图片大小
+    cv2.imshow('pic', img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows() 
+    os.remove('./1.jpg')
 
-# 调整亮度
-def changeLight(img, bboxes):
-    # random.seed(int(time.time()))
-    flag = random.uniform(0.5, 1.5) #flag>1为调暗,小于1为调亮
-    return exposure.adjust_gamma(img, flag), bboxes
+# 图像均为cv2读取
+class DataAugmentForObjectDetection():
+    def __init__(self, rotation_rate=0.5, max_rotation_angle=5, 
+                crop_rate=0.5, shift_rate=0.5, change_light_rate=0.5,
+                add_noise_rate=0.5, flip_rate=0.5, 
+                cutout_rate=0.5, cut_out_length=50, cut_out_holes=1, cut_out_threshold=0.5):
+        self.rotation_rate = rotation_rate
+        self.max_rotation_angle = max_rotation_angle
+        self.crop_rate = crop_rate
+        self.shift_rate = shift_rate
+        self.change_light_rate = change_light_rate
+        self.add_noise_rate = add_noise_rate
+        self.flip_rate = flip_rate
+        self.cutout_rate = cutout_rate
 
-# 平移图像
-def shift_pic_bboxes(img, bboxes):
-    '''
-    参考:https://blog.csdn.net/sty945/article/details/79387054
-    平移后的图片要包含所有的框
-    输入:
-        img:图像array
-        bboxes:该图像包含的所有boundingboxs,一个list,每个元素为[x_min, y_min, x_max, y_max],要确保是数值
-    输出:
-        shift_img:平移后的图像array
-        shift_bboxes:平移后的bounding box的坐标list
-    '''
-    # ---------------------- 平移图像 ----------------------
-    w = img.shape[1]
-    h = img.shape[0]
-    x_min = w  # 裁剪后的包含所有目标框的最小的框
-    x_max = 0
-    y_min = h
-    y_max = 0
-    for bbox in bboxes:
-        x_min = min(x_min, bbox[0])
-        y_min = min(y_min, bbox[1])
-        x_max = max(x_max, bbox[2])
-        y_max = max(y_max, bbox[3])
+        self.cut_out_length = cut_out_length
+        self.cut_out_holes = cut_out_holes
+        self.cut_out_threshold = cut_out_threshold
+    
+    # 加噪声
+    def _addNoise(self, img):
+        '''
+        输入:
+            img:图像array
+        输出:
+            加噪声后的图像array,由于输出的像素是在[0,1]之间,所以得乘以255
+        '''
+        # random.seed(int(time.time())) 
+        # return random_noise(img, mode='gaussian', seed=int(time.time()), clip=True)*255
+        return random_noise(img, mode='gaussian', clip=True)*255
 
-    d_to_left = x_min  # 包含所有目标框的最大左移动距离
-    d_to_right = w - x_max  # 包含所有目标框的最大右移动距离
-    d_to_top = y_min  # 包含所有目标框的最大上移动距离
-    d_to_bottom = h - y_max  # 包含所有目标框的最大下移动距离
+    
+    # 调整亮度
+    def _changeLight(self, img):
+        # random.seed(int(time.time()))
+        flag = random.uniform(0.5, 1.5) #flag>1为调暗,小于1为调亮
+        return exposure.adjust_gamma(img, flag)
+    
+    # cutout
+    def _cutout(self, img, bboxes, length=100, n_holes=1, threshold=0.5):
+        '''
+        原版本：https://github.com/uoguelph-mlrg/Cutout/blob/master/util/cutout.py
+        Randomly mask out one or more patches from an image.
+        Args:
+            img : a 3D numpy array,(h,w,c)
+            bboxes : 框的坐标
+            n_holes (int): Number of patches to cut out of each image.
+            length (int): The length (in pixels) of each square patch.
+        '''
+        
+        def cal_iou(boxA, boxB):
+            '''
+            boxA, boxB为两个框，返回iou
+            boxB为bouding box
+            '''
 
-    x = random.uniform(-(d_to_left - 1) / 3, (d_to_right - 1) / 3)
-    y = random.uniform(-(d_to_top - 1) / 3, (d_to_bottom - 1) / 3)
+            # determine the (x, y)-coordinates of the intersection rectangle
+            xA = max(boxA[0], boxB[0])
+            yA = max(boxA[1], boxB[1])
+            xB = min(boxA[2], boxB[2])
+            yB = min(boxA[3], boxB[3])
 
-    M = np.float32([[1, 0, x], [0, 1, y]])  # x为向左或右移动的像素值,正为向右负为向左; y为向上或者向下移动的像素值,正为向下负为向上
-    shift_img = cv2.warpAffine(img, M, (img.shape[1], img.shape[0]))
+            if xB <= xA or yB <= yA:
+                return 0.0
 
-    # ---------------------- 平移boundingbox ----------------------
-    shift_bboxes = list()
-    for bbox in bboxes:
-        shift_bboxes.append([bbox[0] + x, bbox[1] + y, bbox[2] + x, bbox[3] + y, bbox[4]])
+            # compute the area of intersection rectangle
+            interArea = (xB - xA + 1) * (yB - yA + 1)
 
-    return shift_img, shift_bboxes
+            # compute the area of both the prediction and ground-truth
+            # rectangles
+            boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
+            boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
 
-# 裁剪
-def crop_img_bboxes(img, bboxes):
-    '''
-    裁剪后的图片要包含所有的框
-    输入:
-        img:图像array
-        bboxes:该图像包含的所有boundingboxs,一个list,每个元素为[x_min, y_min, x_max, y_max],要确保是数值
-    输出:
-        crop_img:裁剪后的图像array
-        crop_bboxes:裁剪后的bounding box的坐标list
-    '''
-    # ---------------------- 裁剪图像 ----------------------
-    w = img.shape[1]
-    h = img.shape[0]
-    x_min = w  # 裁剪后的包含所有目标框的最小的框
-    x_max = 0
-    y_min = h
-    y_max = 0
-    for bbox in bboxes:
-        x_min = min(x_min, bbox[0])
-        y_min = min(y_min, bbox[1])
-        x_max = max(x_max, bbox[2])
-        y_max = max(y_max, bbox[3])
+            # compute the intersection over union by taking the intersection
+            # area and dividing it by the sum of prediction + ground-truth
+            # areas - the interesection area
+            # iou = interArea / float(boxAArea + boxBArea - interArea)
+            iou = interArea / float(boxBArea)
 
-    d_to_left = x_min  # 包含所有目标框的最小框到左边的距离
-    d_to_right = w - x_max  # 包含所有目标框的最小框到右边的距离
-    d_to_top = y_min  # 包含所有目标框的最小框到顶端的距离
-    d_to_bottom = h - y_max  # 包含所有目标框的最小框到底部的距离
+            # return the intersection over union value
+            return iou
 
-    # 随机扩展这个最小框
-    crop_x_min = int(x_min - random.uniform(0, d_to_left))
-    crop_y_min = int(y_min - random.uniform(0, d_to_top))
-    crop_x_max = int(x_max + random.uniform(0, d_to_right))
-    crop_y_max = int(y_max + random.uniform(0, d_to_bottom))
+        # 得到h和w
+        if img.ndim == 3:
+            h,w,c = img.shape
+        else:
+            _,h,w,c = img.shape
+        
+        mask = np.ones((h,w,c), np.float32)
 
-    # 随机扩展这个最小框 , 防止别裁的太小
-    # crop_x_min = int(x_min - random.uniform(d_to_left//2, d_to_left))
-    # crop_y_min = int(y_min - random.uniform(d_to_top//2, d_to_top))
-    # crop_x_max = int(x_max + random.uniform(d_to_right//2, d_to_right))
-    # crop_y_max = int(y_max + random.uniform(d_to_bottom//2, d_to_bottom))
+        for n in range(n_holes):
+            
+            chongdie = True    #看切割的区域是否与box重叠太多
+            
+            while chongdie:
+                y = np.random.randint(h)
+                x = np.random.randint(w)
 
-    # 确保不要越界
-    crop_x_min = max(0, crop_x_min)
-    crop_y_min = max(0, crop_y_min)
-    crop_x_max = min(w, crop_x_max)
-    crop_y_max = min(h, crop_y_max)
+                y1 = np.clip(y - length // 2, 0, h)    #numpy.clip(a, a_min, a_max, out=None), clip这个函数将将数组中的元素限制在a_min, a_max之间，大于a_max的就使得它等于 a_max，小于a_min,的就使得它等于a_min
+                y2 = np.clip(y + length // 2, 0, h)
+                x1 = np.clip(x - length // 2, 0, w)
+                x2 = np.clip(x + length // 2, 0, w)
 
-    crop_img = img[crop_y_min:crop_y_max, crop_x_min:crop_x_max]
+                chongdie = False
+                for box in bboxes:
+                    if cal_iou([x1,y1,x2,y2], box) > threshold:
+                        chongdie = True
+                        break
+            
+            mask[y1: y2, x1: x2, :] = 0.
+        
+        # mask = np.expand_dims(mask, axis=0)
+        img = img * mask
 
-    # ---------------------- 裁剪boundingbox ----------------------
-    # 裁剪后的boundingbox坐标计算
-    crop_bboxes = list()
-    for bbox in bboxes:
-        crop_bboxes.append([bbox[0] - crop_x_min, bbox[1] - crop_y_min, bbox[2] - crop_x_min, bbox[3] - crop_y_min, bbox[4]])
+        return img
 
-    return crop_img, crop_bboxes
+    # 旋转
+    def _rotate_img_bbox(self, img, bboxes, angle=5, scale=1.):
+        '''
+        参考:https://blog.csdn.net/u014540717/article/details/53301195crop_rate
+        输入:
+            img:图像array,(h,w,c)
+            bboxes:该图像包含的所有boundingboxs,一个list,每个元素为[x_min, y_min, x_max, y_max],要确保是数值
+            angle:旋转角度
+            scale:默认1
+        输出:
+            rot_img:旋转后的图像array
+            rot_bboxes:旋转后的boundingbox坐标list
+        '''
+        #---------------------- 旋转图像 ----------------------
+        w = img.shape[1]
+        h = img.shape[0]
+        # 角度变弧度
+        rangle = np.deg2rad(angle)  # angle in radians
+        # now calculate new image width and height
+        nw = (abs(np.sin(rangle)*h) + abs(np.cos(rangle)*w))*scale
+        nh = (abs(np.cos(rangle)*h) + abs(np.sin(rangle)*w))*scale
+        # ask OpenCV for the rotation matrix
+        rot_mat = cv2.getRotationMatrix2D((nw*0.5, nh*0.5), angle, scale)
+        # calculate the move from the old center to the new center combined
+        # with the rotation
+        rot_move = np.dot(rot_mat, np.array([(nw-w)*0.5, (nh-h)*0.5,0]))
+        # the move only affects the translation, so update the translation
+        # part of the transform
+        rot_mat[0,2] += rot_move[0]
+        rot_mat[1,2] += rot_move[1]
+        # 仿射变换
+        rot_img = cv2.warpAffine(img, rot_mat, (int(math.ceil(nw)), int(math.ceil(nh))), flags=cv2.INTER_LANCZOS4)
 
+        #---------------------- 矫正bbox坐标 ----------------------
+        # rot_mat是最终的旋转矩阵
+        # 获取原始bbox的四个中点，然后将这四个点转换到旋转后的坐标系下
+        rot_bboxes = list()
+        for bbox in bboxes:
+            xmin = bbox[0]
+            ymin = bbox[1]
+            xmax = bbox[2]
+            ymax = bbox[3]
+            point1 = np.dot(rot_mat, np.array([(xmin+xmax)/2, ymin, 1]))
+            point2 = np.dot(rot_mat, np.array([xmax, (ymin+ymax)/2, 1]))
+            point3 = np.dot(rot_mat, np.array([(xmin+xmax)/2, ymax, 1]))
+            point4 = np.dot(rot_mat, np.array([xmin, (ymin+ymax)/2, 1]))
+            # 合并np.array
+            concat = np.vstack((point1, point2, point3, point4))
+            # 改变array类型
+            concat = concat.astype(np.int32)
+            # 得到旋转后的坐标
+            rx, ry, rw, rh = cv2.boundingRect(concat)
+            rx_min = rx
+            ry_min = ry
+            rx_max = rx+rw
+            ry_max = ry+rh
+            # 加入list中
+            rot_bboxes.append([rx_min, ry_min, rx_max, ry_max])
+        
+        return rot_img, rot_bboxes
 
+    # 裁剪
+    def _crop_img_bboxes(self, img, bboxes):
+        '''
+        裁剪后的图片要包含所有的框
+        输入:
+            img:图像array
+            bboxes:该图像包含的所有boundingboxs,一个list,每个元素为[x_min, y_min, x_max, y_max],要确保是数值
+        输出:
+            crop_img:裁剪后的图像array
+            crop_bboxes:裁剪后的bounding box的坐标list
+        '''
+        #---------------------- 裁剪图像 ----------------------
+        w = img.shape[1]
+        h = img.shape[0]
+        x_min = w   #裁剪后的包含所有目标框的最小的框
+        x_max = 0
+        y_min = h
+        y_max = 0
+        for bbox in bboxes:
+            x_min = min(x_min, bbox[0])
+            y_min = min(y_min, bbox[1])
+            x_max = max(x_max, bbox[2])
+            y_max = max(y_max, bbox[3])
+        
+        d_to_left = x_min           #包含所有目标框的最小框到左边的距离
+        d_to_right = w - x_max      #包含所有目标框的最小框到右边的距离
+        d_to_top = y_min            #包含所有目标框的最小框到顶端的距离
+        d_to_bottom = h - y_max     #包含所有目标框的最小框到底部的距离
 
-#数据增强
-def data_augmentation(fn, imgs_path, annos_path, imgs_new_path, annos_new_path):
-    # 返回每一张原图的路径
-    imgs_path_list = GetFileFromThisRootDir(imgs_path)
-    #对所有图像操作
-    for num, img_path in enumerate(imgs_path_list):
-        # 打印处理进度
-        print('processing %d of %d ' % (num+1, len(imgs_path_list)))
-        #读入图像
-        img = cv2.imread(img_path)
-        # 得到原图的名称
-        file_name = os.path.basename(os.path.splitext(img_path)[0])
-        # 读取anno标签数据，返回相应的信息
-        anno = os.path.join(annos_path, '%s.xml' % file_name)
-        gts = parse_xml(anno)
+        #随机扩展这个最小框
+        crop_x_min = int(x_min - random.uniform(0, d_to_left))
+        crop_y_min = int(y_min - random.uniform(0, d_to_top))
+        crop_x_max = int(x_max + random.uniform(0, d_to_right))
+        crop_y_max = int(y_max + random.uniform(0, d_to_bottom))
 
-        # 保存处理后图片的路径
-        save_pic_path = '_'.join([imgs_new_path, fn.__name__])
-        if not os.path.isdir(save_pic_path):
-            os.makedirs(save_pic_path)
+        # 随机扩展这个最小框 , 防止别裁的太小
+        # crop_x_min = int(x_min - random.uniform(d_to_left//2, d_to_left))
+        # crop_y_min = int(y_min - random.uniform(d_to_top//2, d_to_top))
+        # crop_x_max = int(x_max + random.uniform(d_to_right//2, d_to_right))
+        # crop_y_max = int(y_max + random.uniform(d_to_bottom//2, d_to_bottom))
 
-        # 保存处理后label的路径
-        save_ann_path = annos_new_path  # os.path.join(annos_new_path, fn.__name__)
-        if not os.path.isdir(save_ann_path):
-            os.makedirs(save_ann_path)
+        #确保不要越界
+        crop_x_min = max(0, crop_x_min)
+        crop_y_min = max(0, crop_y_min)
+        crop_x_max = min(w, crop_x_max)
+        crop_y_max = min(h, crop_y_max)
 
-        # 循环处理数次
-        for i in range(2):
-            #处理图像(需要调整bbox)
-            img_new, gts_new = fn(img, gts)
-            ## 处理图像(不需要调整bbox)
-            ## img_new, gts_new = fn(img), gts
+        crop_img = img[crop_y_min:crop_y_max, crop_x_min:crop_x_max]
+        
+        #---------------------- 裁剪boundingbox ----------------------
+        #裁剪后的boundingbox坐标计算
+        crop_bboxes = list()
+        for bbox in bboxes:
+            crop_bboxes.append([bbox[0]-crop_x_min, bbox[1]-crop_y_min, bbox[2]-crop_x_min, bbox[3]-crop_y_min])
+        
+        return crop_img, crop_bboxes
+  
+    # 平移
+    def _shift_pic_bboxes(self, img, bboxes):
+        '''
+        参考:https://blog.csdn.net/sty945/article/details/79387054
+        平移后的图片要包含所有的框
+        输入:
+            img:图像array
+            bboxes:该图像包含的所有boundingboxs,一个list,每个元素为[x_min, y_min, x_max, y_max],要确保是数值
+        输出:
+            shift_img:平移后的图像array
+            shift_bboxes:平移后的bounding box的坐标list
+        '''
+        #---------------------- 平移图像 ----------------------
+        w = img.shape[1]
+        h = img.shape[0]
+        x_min = w   #裁剪后的包含所有目标框的最小的框
+        x_max = 0
+        y_min = h
+        y_max = 0
+        for bbox in bboxes:
+            x_min = min(x_min, bbox[0])
+            y_min = min(y_min, bbox[1])
+            x_max = max(x_max, bbox[2])
+            y_max = max(y_max, bbox[3])
+        
+        d_to_left = x_min           #包含所有目标框的最大左移动距离
+        d_to_right = w - x_max      #包含所有目标框的最大右移动距离
+        d_to_top = y_min            #包含所有目标框的最大上移动距离
+        d_to_bottom = h - y_max     #包含所有目标框的最大下移动距离
 
-            # 得到处理后的图像的高、宽、深度，用于书写xml
-            H, W, D = img_new.shape
-            #img_size = img_new.shape
+        x = random.uniform(-(d_to_left-1) / 3, (d_to_right-1) / 3)
+        y = random.uniform(-(d_to_top-1) / 3, (d_to_bottom-1) / 3)
+        
+        M = np.float32([[1, 0, x], [0, 1, y]])  #x为向左或右移动的像素值,正为向右负为向左; y为向上或者向下移动的像素值,正为向下负为向上
+        shift_img = cv2.warpAffine(img, M, (img.shape[1], img.shape[0]))
 
+        #---------------------- 平移boundingbox ----------------------
+        shift_bboxes = list()
+        for bbox in bboxes:
+            shift_bboxes.append([int(bbox[0]+x), int(bbox[1]+y), int(bbox[2]+x), int(bbox[3]+y)])
 
-            # 保存处理后图像
-            # print('save %s_%s_%d.jpg' % (file_name, fn.__name__, i))
-            cv2.imwrite(os.path.join(save_pic_path, '%s_%s_%d.jpg' % (file_name, fn.__name__, i)), img_new)
+        return shift_img, shift_bboxes
 
-            #写annotation.xml:
-            # print('save %s_%s_%d.xml' % (file_name, fn.__name__, i))
-            writeXml(save_ann_path, '%s_%s_%d' % (file_name, fn.__name__, i), W, H, D, gts_new)
-            #generate_xml('%s_%s' % (file_name, fn.__name__), gts_new, img_size, annos_new_path)
+    # 镜像
+    def _filp_pic_bboxes(self, img, bboxes):
+        '''
+            参考:https://blog.csdn.net/jningwei/article/details/78753607
+            平移后的图片要包含所有的框
+            输入:
+                img:图像array
+                bboxes:该图像包含的所有boundingboxs,一个list,每个元素为[x_min, y_min, x_max, y_max],要确保是数值
+            输出:
+                flip_img:平移后的图像array
+                flip_bboxes:平移后的bounding box的坐标list
+        '''
+        # ---------------------- 翻转图像 ----------------------
+
+        import copy
+        flip_img = copy.deepcopy(img)
+        # if random.random() < 0.5:    #0.5的概率水平翻转，0.5的概率垂直翻转
+        #     horizon = True
+        # else:
+        #     horizon = False
+        # h,w,_ = img.shape
+        _,w,_ = img.shape
+        # if horizon: #水平翻转
+        flip_img =  cv2.flip(flip_img, 1)   # 1 水平翻转  0 垂直翻转  -1 水平垂直翻转
+        # else:
+            # flip_img = cv2.flip(flip_img, 0)
+
+        # ---------------------- 调整boundingbox ----------------------
+        flip_bboxes = list()
+        for box in bboxes:
+            x_min = box[0]
+            y_min = box[1]
+            x_max = box[2]
+            y_max = box[3]
+            # if horizon:
+            flip_bboxes.append([w-x_max, y_min, w-x_min, y_max])
+            # else:
+                # flip_bboxes.append([x_min, h-y_max, x_max, h-y_min])
+
+        return flip_img, flip_bboxes
+
 
 
 if __name__ == '__main__':
-    # voc路径
-    root = '/home/kevin/Documents/traffic_light/LISA/traffic_light/dayTrain'
-    img_raw_dir = root + '/warningJpegsNew'
-    annos_path = root + '/warningAnnotationsNew'
 
-    # 返回每一张原图的路径
-    # imgs_path = GetFileFromThisRootDir(img_dir)
+    ### generate 2**6 times pictures ###
 
-    # 存储新的anno位置
-    annos_new_path = root + '/warningAnnotationsNew/0mergeProcess'
-    # if not os.path.isdir(annos_new_path):
-    #     os.makedirs(annos_new_path)
+    import shutil
+    from xml_helper import *
 
-    # 存储新图片保存的位置
-    imgs_new_path = root + '/warningJpegsNew/0mergeProcess'
-    # if not os.path.isdir(imgs_new_path):
-    #     os.makedirs(imgs_new_path)
+    # need_aug_num = 1                  
 
-    img_dirs = os.listdir(img_raw_dir)
+    dataAug = DataAugmentForObjectDetection()
 
-    fn_dic = {'addNoise': addNoise, 'changeLight': changeLight,
-              'shift_pic_bboxes': shift_pic_bboxes, 'crop_img_bboxes': crop_img_bboxes}
+    source_pic_root_path = '/home/jay/Documents/IMAGE'
+    source_xml_root_path = '/home/jay/Documents/ANNOTATION'
 
-    for i in range(len(img_dirs)):
-        for j in range(i+1, len(img_dirs)):
-            imgs_path = os.path.join(img_raw_dir, img_dirs[i])
-            annos_path = os.path.join(annos_path, img_dirs[i])
-            imgs_new_path = os.path.join(imgs_new_path, img_dirs[i])
-            annos_new_path = os.path.join(annos_new_path, img_dirs[i])
+    for i in range(6):   # 一共进行6种变换
+        shifts = [dataAug._addNoise, dataAug._changeLight, dataAug._crop_img_bboxes, 
+        dataAug._filp_pic_bboxes, dataAug._rotate_img_bbox, dataAug._shift_pic_bboxes]
 
-           
-            data_augmentation(fn_dic[img_dirs[j]], imgs_path, annos_path, imgs_new_path, annos_new_path)
+        for parent, _, files in os.walk(source_pic_root_path):
+            for file in files:
+                print('The file_name is %s' % file)
+                pic_path = os.path.join(parent, file)
+                xml_path = os.path.join(source_xml_root_path, file[:-4]+'.xml')
+                coords = parse_xml(xml_path)        #解析得到box信息，格式为[[x_min,y_min,x_max,y_max,name]]
+                print('coords is {0}'.format(coords))
+                zuobiao = [coord[:4] for coord in coords]
+                name = [coord[-1] for coord in coords]
+                print('name is {0}'.format(name))
+                img = cv2.imread(pic_path)
+                
+                
+                if i > 1:     # 前三种变换不需要改变bbox坐标
+                    auged_img, auged_bboxes = shifts[i](img, zuobiao)   # 变换
 
+                    # 存储新生成的图片
+                    shift_name = shifts[i].__name__
+                    print('The shift_name is %s' % shift_name)
+                    new_pic_name = file[:-4] + shift_name + '.jpg'
+                    print('The new_pic_name is %s' % new_pic_name)
+                    pic_save_path = os.path.join(parent, new_pic_name)
+                    cv2.imwrite(pic_save_path, auged_img)
 
+                    # 存储新生成的xml
+                    sp = auged_img.shape   # 获取图像大小
+                    img_size = [sp[0], sp[1], sp[2]]
+                    new_coords = []
+                    for j in range(len(coords)):
+                        auged_bboxes[j].append(name[j])
+                        print('rebuild coords is {0}'.format(auged_bboxes[j]))
+                        new_coords.append(auged_bboxes[j])
+                    generate_xml(new_pic_name, new_coords, img_size, source_xml_root_path)
+                
+                else:
+                    auged_img = shifts[i](img)
 
+                    # 存储新生成的图片
+                    shift_name = shifts[i].__name__
+                    print('The shift_name is {0}'.format(shift_name))
+                    new_pic_name = file[:-4] + shift_name + '.jpg'
+                    print('The new_pic_name is {0}'.format(new_pic_name))
+                    pic_save_path = os.path.join(parent, new_pic_name)
+                    cv2.imwrite(pic_save_path, auged_img)
 
+                    # 复制并重命名xml
+                    newxml_path = os.path.join(source_xml_root_path, file[:-4] + shift_name + '.xml')
+                    shutil.copy(xml_path, newxml_path)

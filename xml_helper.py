@@ -1,4 +1,5 @@
 # -*- coding=utf-8 -*-
+import os
 import xml.etree.ElementTree as ET
 import xml.dom.minidom as DOC
 
@@ -85,7 +86,7 @@ def generate_xml(img_name,coords,img_size,out_root_path):
         annotation.appendChild(object)
 
         title = doc.createElement('name')
-        title_text = doc.createTextNode(coord[4])
+        title_text = doc.createTextNode(str(coord[4]))
         title.appendChild(title_text)
         object.appendChild(title)
 
@@ -119,6 +120,6 @@ def generate_xml(img_name,coords,img_size,out_root_path):
         bndbox.appendChild(title)
 
     # 将DOM对象doc写入文件
-    f = open(os.path.jpin(out_root_path, img_name[:-4]+'.xml'),'w')
+    f = open(os.path.join(out_root_path, img_name[:-4]+'.xml'),'w')
     f.write(doc.toprettyxml(indent = ''))
     f.close()
