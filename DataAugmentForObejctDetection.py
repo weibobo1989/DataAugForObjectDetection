@@ -3,7 +3,7 @@
 # description:
 #     data augmentation for obeject detection
 # author:
-#     maozezhong 2018-6-27
+#     liuzhicai 2018-6-27
 ##############################################################
 
 # 包括:
